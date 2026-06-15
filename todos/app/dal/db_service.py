@@ -1,14 +1,15 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.dal.db_repo import DBRepo
 from app.dal.constants import GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT
 from app.models.tables import Priority, Category, Todo
-from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB
+from app.schemas import CategoryInDB, CategoryUpdateInDB, TodoInDB, TodoUpdateInDB
 from app.http_exceptions import ResourceNotExists, UserNotAllowed, ResourceAlreadyExists
 
 
@@ -52,12 +53,13 @@ class DBService:
         default_categories_filter = Category.created_by_id.is_(None)
         user_categories_filter = Category.created_by_id == created_by_id
         query_filter = or_(user_categories_filter, default_categories_filter)
-        return await self._repo.get_multi(
+        return await self._repo.get_multi_with_options(
             session,
             table_model=Category,
             query_filter=query_filter,
             limit=limit,
-            skip=skip
+            skip=skip,
+            options=[selectinload(Category.todos)]
         )
 
     async def add_category(
@@ -72,7 +74,51 @@ class DBService:
         users_categories_names: list[str] = [c.name for c in users_categories]
         if category_in.name in users_categories_names:
             raise ResourceAlreadyExists(resource='category name')
-        return await self._repo.create(session, obj_to_create=category_in)
+        created_category = await self._repo.create(session, obj_to_create=category_in)
+        # Reload with selectinload to eagerly load todos for response serialization
+        query = (
+            select(Category)
+            .filter(Category.id == created_category.id)
+            .options(selectinload(Category.todos))
+        )
+        result = await session.execute(query)
+        return result.scalars().first()
+
+    async def update_category(
+        self,
+        session: AsyncSession,
+        *,
+        updated_category: CategoryUpdateInDB
+    ) -> Category:
+        # Load with selectinload to eagerly load todos for response serialization
+        query = (
+            select(Category)
+            .filter(Category.id == updated_category.id)
+            .options(selectinload(Category.todos))
+        )
+        result = await session.execute(query)
+        category_to_update: Optional[Category] = result.scalars().first()
+        if not category_to_update:
+            raise ResourceNotExists(resource='category')
+        if category_to_update.created_by_id != updated_category.created_by_id:
+            raise UserNotAllowed('a user can not update a category that was not created by him')
+        users_categories: list[Category] = await self.get_categories(
+            session,
+            created_by_id=updated_category.created_by_id
+        )
+        users_categories_names: list[str] = [
+            c.name for c in users_categories if c.id != updated_category.id
+        ]
+        if updated_category.name in users_categories_names:
+            raise ResourceAlreadyExists(resource='category name')
+        updated: Optional[Category] = await self._repo.update(
+            session,
+            updated_obj=updated_category,
+            db_obj_to_update=category_to_update
+        )
+        if updated:
+            return updated
+        raise ResourceNotExists(resource='category')
 
     async def delete_category(
         self,

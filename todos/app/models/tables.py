@@ -35,6 +35,14 @@ class Category(Base):
         viewonly=True
     )
 
+    @property
+    def todos_count(self) -> int:
+        return len(self.todos) if self.todos else 0
+
+    @property
+    def is_default(self) -> bool:
+        return self.created_by_id is None
+
 
 class Todo(Base):
     id = Column(BigInteger(), primary_key=True, autoincrement=True)

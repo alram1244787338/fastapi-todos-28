@@ -2,6 +2,7 @@ from typing import Optional, Type, TypeVar, Union, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 
 from app.models.base import Base
 from app.schemas.base import BaseInDB, BaseUpdateInDB
@@ -43,6 +44,28 @@ class DBRepo:
         query = select(table_model)
         if query_filter is not None:
             query = query.filter(query_filter)
+        query = query.offset(skip)
+        if limit is not None:
+            query = query.limit(limit)
+        result = await session.execute(query)
+        return result.scalars().all()
+
+    async def get_multi_with_options(    # type: ignore[no-untyped-def]
+        self,
+        session: AsyncSession,
+        *,
+        table_model: Type[ModelType],
+        query_filter=None,
+        skip: int = GET_MULTI_DEFAULT_SKIP,
+        limit: Optional[int] = None,
+        options: Optional[list] = None
+    ) -> list[ModelType]:
+        query = select(table_model)
+        if query_filter is not None:
+            query = query.filter(query_filter)
+        if options:
+            for option in options:
+                query = query.options(option)
         query = query.offset(skip)
         if limit is not None:
             query = query.limit(limit)
