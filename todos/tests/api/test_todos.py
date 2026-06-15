@@ -12,6 +12,13 @@ config = get_config()
 
 API_TODOS_PREFIX: Final[str] = f'{config.API_V1_STR}/todos'
 
+# The seeded todos that belong to the user behind the `user_token_headers`
+# fixture (test1@test.com). There is exactly one: id=1, "Learn the sicilian
+# opening", priority Medium (id=2), categories Personal (id=1) + Chess (id=3),
+# is_completed=False. The other seeded todo (mario kart) belongs to a different
+# user and must never appear in these results.
+USER_TODOS: Final[list] = get_tests_data()['users'][0]['todos']
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('headers, status_code, res_body', [
@@ -31,6 +38,78 @@ async def test_get_todos(
     res = await client.get(API_TODOS_PREFIX, headers=headers)
     assert res.status_code == status_code
     assert res.json() == res_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('query, expected_body, expected_total', [
+    ({'is_completed': False}, USER_TODOS, 1),
+    ({'is_completed': True}, [], 0),
+    ({'priority_id': 2}, USER_TODOS, 1),
+    ({'priority_id': 1}, [], 0),
+    ({'category_id': 1}, USER_TODOS, 1),
+    ({'category_id': 3}, USER_TODOS, 1),
+    ({'category_id': 4}, [], 0),
+    ({'keyword': 'sicilian'}, USER_TODOS, 1),
+    ({'keyword': 'SICILIAN'}, USER_TODOS, 1),
+    ({'keyword': 'opening'}, USER_TODOS, 1),
+    ({'keyword': 'mario'}, [], 0),
+    ({'keyword': 'does-not-exist'}, [], 0),
+    (
+        {'is_completed': False, 'priority_id': 2, 'category_id': 1, 'keyword': 'sicilian'},
+        USER_TODOS,
+        1
+    ),
+    ({'is_completed': False, 'priority_id': 1}, [], 0),
+], ids=[
+    'filter by not completed',
+    'filter by completed is empty',
+    'filter by matching priority',
+    'filter by other priority is empty',
+    'filter by personal category',
+    'filter by chess category',
+    'filter by another users category is empty',
+    'filter by keyword',
+    'filter by keyword is case insensitive',
+    'filter by keyword substring',
+    'filter by another users todo keyword is empty',
+    'filter by missing keyword is empty',
+    'all filters combined match',
+    'conflicting filters are combined with and'
+])
+async def test_get_todos_with_filters(
+    client: AsyncClient,
+    user_token_headers,
+    query,
+    expected_body,
+    expected_total
+):
+    res = await client.get(API_TODOS_PREFIX, headers=user_token_headers, params=query)
+    assert res.status_code == 200
+    assert res.json() == expected_body
+    assert res.headers['X-Total-Count'] == str(expected_total)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('query, expected_body, expected_total', [
+    ({'skip': 0, 'limit': 10}, USER_TODOS, 1),
+    ({'skip': 1, 'limit': 10}, [], 1),
+    ({'skip': 0, 'limit': 0}, [], 1),
+], ids=[
+    'first page returns the todo',
+    'page beyond the results is empty but total stands',
+    'zero limit returns no rows but total stands'
+])
+async def test_get_todos_pagination(
+    client: AsyncClient,
+    user_token_headers,
+    query,
+    expected_body,
+    expected_total
+):
+    res = await client.get(API_TODOS_PREFIX, headers=user_token_headers, params=query)
+    assert res.status_code == 200
+    assert res.json() == expected_body
+    assert res.headers['X-Total-Count'] == str(expected_total)
 
 
 @pytest.mark.asyncio

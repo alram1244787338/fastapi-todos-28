@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import conint
 
@@ -6,7 +6,7 @@ from app.core.db import get_async_session
 from app.users.users import current_logged_user
 from app.models.tables import User, Todo
 from app.dal import db_service, GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT, MAX_POSTGRES_INTEGER
-from app.schemas import TodoRead, TodoInDB, TodoCreate, TodoUpdate, TodoUpdateInDB
+from app.schemas import TodoRead, TodoInDB, TodoCreate, TodoUpdate, TodoUpdateInDB, TodoFilter
 from app.utils import exception_handler, get_open_api_response, get_open_api_unauthorized_access_response
 
 
@@ -23,20 +23,40 @@ router = APIRouter(
 @router.get(
     '',
     response_model=list[TodoRead],
-    responses={status.HTTP_401_UNAUTHORIZED: get_open_api_unauthorized_access_response()}
+    responses={
+        status.HTTP_200_OK: {
+            'description': "The current user's todos for the requested page, "
+                           'filtered by the supplied query parameters.',
+            'headers': {
+                'X-Total-Count': {
+                    'description': 'Total number of todos matching the supplied '
+                                   'filters, ignoring skip/limit pagination.',
+                    'schema': {'type': 'integer'}
+                }
+            }
+        },
+        status.HTTP_401_UNAUTHORIZED: get_open_api_unauthorized_access_response()
+    }
 )
 async def get_todos(
+    response: Response,
+    filters: TodoFilter = Depends(),
     skip: conint(ge=0, le=MAX_POSTGRES_INTEGER) = GET_MULTI_DEFAULT_SKIP,  # type: ignore[valid-type]
     limit: conint(ge=0, le=MAX_POSTGRES_INTEGER) = GET_MULTI_DEFAULT_LIMIT,  # type: ignore[valid-type]
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_logged_user)
-) -> Todo:
-    return await db_service.get_todos(
+) -> list[Todo]:
+    todos, total = await db_service.get_todos(
         session,
         created_by_id=user.id,
+        filters=filters,
         skip=skip,
         limit=limit
     )
+    # The body stays a plain list for backwards compatibility; the total match
+    # count is exposed via a header so the frontend can build pagination.
+    response.headers['X-Total-Count'] = str(total)
+    return todos
 
 
 @router.post(

@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -20,6 +21,16 @@ class TodoRead(TodoBase):
 
     class Config:
         orm_mode = True
+
+
+class TodoFilter(BaseModel):
+    # Optional, composable filters for querying a user's todos.
+    # Every provided filter is combined with AND; unset (None) filters are ignored.
+    # Used as a FastAPI dependency so each field maps to a query parameter.
+    is_completed: Optional[bool] = None
+    priority_id: Optional[int] = None
+    category_id: Optional[int] = None
+    keyword: Optional[str] = None
 
 
 class TodoCreate(TodoBase):

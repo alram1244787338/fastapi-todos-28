@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, Any
 
 from sqlalchemy import or_, and_
 from sqlalchemy.exc import IntegrityError
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dal.db_repo import DBRepo
 from app.dal.constants import GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT
 from app.models.tables import Priority, Category, Todo
-from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB
+from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB, TodoFilter
 from app.http_exceptions import ResourceNotExists, UserNotAllowed, ResourceAlreadyExists
 
 
@@ -92,21 +92,56 @@ class DBService:
             raise UserNotAllowed('a user can not delete a category that was not created by him')
         await self._repo.delete(session, table_model=Category, id_to_delete=id_to_delete)
 
+    def _build_todos_query_filter(
+        self,
+        *,
+        created_by_id: uuid.UUID,
+        filters: TodoFilter
+    ) -> Any:
+        # The ownership boundary is always enforced first, so a user can only
+        # ever see their own todos no matter which optional filters are supplied.
+        # Every additional filter is appended and combined with AND, which means
+        # multiple conditions narrow the result together instead of overriding
+        # one another.
+        conditions: list[Any] = [Todo.created_by_id == created_by_id]
+        if filters.is_completed is not None:
+            conditions.append(Todo.is_completed == filters.is_completed)
+        if filters.priority_id is not None:
+            conditions.append(Todo.priority_id == filters.priority_id)
+        if filters.category_id is not None:
+            conditions.append(Todo.categories.any(Category.id == filters.category_id))
+        if filters.keyword:
+            conditions.append(Todo.content.ilike(f'%{filters.keyword}%'))
+        return and_(*conditions)
+
     async def get_todos(
         self,
         session: AsyncSession,
         *,
         created_by_id: uuid.UUID,
+        filters: TodoFilter,
         skip: int = GET_MULTI_DEFAULT_SKIP,
         limit: int = GET_MULTI_DEFAULT_LIMIT
-    ) -> list[Todo]:
-        return await self._repo.get_multi(
+    ) -> tuple[list[Todo], int]:
+        query_filter = self._build_todos_query_filter(
+            created_by_id=created_by_id,
+            filters=filters
+        )
+        todos: list[Todo] = await self._repo.get_multi(
             session,
             table_model=Todo,
-            query_filter=Todo.created_by_id == created_by_id,
+            query_filter=query_filter,
             skip=skip,
             limit=limit
         )
+        # total counts every todo matching the filters, ignoring skip/limit,
+        # so the client can compute how many pages exist.
+        total: int = await self._repo.count(
+            session,
+            table_model=Todo,
+            query_filter=query_filter
+        )
+        return todos, total
 
     async def add_todo(
         self,
