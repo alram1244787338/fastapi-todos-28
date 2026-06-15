@@ -8,7 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dal.db_repo import DBRepo
 from app.dal.constants import GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT
 from app.models.tables import Priority, Category, Todo
-from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB
+from app.schemas import (
+    CategoryInDB,
+    CategoryReadDetailed,
+    CategoryUpdateInDB,
+    TodoInDB,
+    TodoUpdateInDB
+)
 from app.http_exceptions import ResourceNotExists, UserNotAllowed, ResourceAlreadyExists
 
 
@@ -38,6 +44,32 @@ class DBService:
         are_categories_valid: bool = len(todo_categories_ids) == len(categories_from_db)
         return are_categories_valid
 
+    async def _get_visible_categories(
+        self,
+        session: AsyncSession,
+        *,
+        created_by_id: uuid.UUID
+    ) -> list[Category]:
+        # the categories a user is allowed to see and whose names he may not reuse:
+        # the system default categories (created_by_id is NULL) and his own ones.
+        default_categories_filter = Category.created_by_id.is_(None)
+        user_categories_filter = Category.created_by_id == created_by_id
+        query_filter = or_(user_categories_filter, default_categories_filter)
+        return await self._repo.get_multi(
+            session,
+            table_model=Category,
+            query_filter=query_filter
+        )
+
+    @staticmethod
+    def _to_detailed_category(category: Category, todos_count: int) -> CategoryReadDetailed:
+        return CategoryReadDetailed(
+            id=category.id,
+            name=category.name,
+            is_default=category.created_by_id is None,
+            todos_count=todos_count
+        )
+
     async def get_priorities(self, session: AsyncSession) -> list[Priority]:
         return await self._repo.get_multi(session, table_model=Priority)
 
@@ -48,17 +80,36 @@ class DBService:
         created_by_id: uuid.UUID,
         skip: int = GET_MULTI_DEFAULT_SKIP,
         limit: int = GET_MULTI_DEFAULT_LIMIT
-    ) -> list[Category]:
-        default_categories_filter = Category.created_by_id.is_(None)
-        user_categories_filter = Category.created_by_id == created_by_id
-        query_filter = or_(user_categories_filter, default_categories_filter)
-        return await self._repo.get_multi(
+    ) -> list[CategoryReadDetailed]:
+        categories_with_counts = await self._repo.get_categories_with_todos_count(
             session,
-            table_model=Category,
-            query_filter=query_filter,
-            limit=limit,
-            skip=skip
+            created_by_id=created_by_id,
+            skip=skip,
+            limit=limit
         )
+        return [
+            self._to_detailed_category(category, todos_count)
+            for category, todos_count in categories_with_counts
+        ]
+
+    async def get_category(
+        self,
+        session: AsyncSession,
+        *,
+        category_id: int,
+        created_by_id: uuid.UUID
+    ) -> CategoryReadDetailed:
+        # only default categories and the user's own ones are visible to him,
+        # so another user's category is reported as not found.
+        categories_with_counts = await self._repo.get_categories_with_todos_count(
+            session,
+            created_by_id=created_by_id,
+            query_filter=Category.id == category_id
+        )
+        if not categories_with_counts:
+            raise ResourceNotExists(resource='category')
+        category, todos_count = categories_with_counts[0]
+        return self._to_detailed_category(category, todos_count)
 
     async def add_category(
         self,
@@ -66,13 +117,50 @@ class DBService:
         *,
         category_in: CategoryInDB
     ) -> Category:
-        users_categories: list[Category] = await self.get_categories(
+        visible_categories: list[Category] = await self._get_visible_categories(
             session,
-            created_by_id=category_in.created_by_id)
-        users_categories_names: list[str] = [c.name for c in users_categories]
-        if category_in.name in users_categories_names:
+            created_by_id=category_in.created_by_id
+        )
+        visible_categories_names: list[str] = [category.name for category in visible_categories]
+        if category_in.name in visible_categories_names:
             raise ResourceAlreadyExists(resource='category name')
         return await self._repo.create(session, obj_to_create=category_in)
+
+    async def update_category(
+        self,
+        session: AsyncSession,
+        *,
+        updated_category: CategoryUpdateInDB
+    ) -> Category:
+        category_to_update: Optional[Category] = await self._repo.get(
+            session,
+            table_model=Category,
+            query_filter=Category.id == updated_category.id
+        )
+        if not category_to_update:
+            raise ResourceNotExists(resource='category')
+        if category_to_update.created_by_id != updated_category.created_by_id:
+            raise UserNotAllowed('a user can not update a category that was not created by him')
+        # the new name must stay unique against the user's other categories and the
+        # default ones, while the category being renamed is excluded from that check.
+        visible_categories: list[Category] = await self._get_visible_categories(
+            session,
+            created_by_id=updated_category.created_by_id
+        )
+        other_categories_names: list[str] = [
+            category.name for category in visible_categories
+            if category.id != updated_category.id
+        ]
+        if updated_category.name in other_categories_names:
+            raise ResourceAlreadyExists(resource='category name')
+        updated_obj: Optional[Category] = await self._repo.update(
+            session,
+            updated_obj=updated_category,
+            db_obj_to_update=category_to_update
+        )
+        if not updated_obj:
+            raise ResourceNotExists(resource='category')
+        return updated_obj
 
     async def delete_category(
         self,

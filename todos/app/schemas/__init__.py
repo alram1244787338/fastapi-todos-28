@@ -6,5 +6,12 @@
 from .base import BaseInDB
 from .user import UserRead, UserCreate, UserUpdate
 from .priority import PriorityRead
-from .category import CategoryRead, CategoryCreate, CategoryInDB
+from .category import (
+    CategoryRead,
+    CategoryReadDetailed,
+    CategoryCreate,
+    CategoryUpdate,
+    CategoryInDB,
+    CategoryUpdateInDB
+)
 from .todo import TodoRead, TodoCreate, TodoInDB, TodoUpdate, TodoUpdateInDB

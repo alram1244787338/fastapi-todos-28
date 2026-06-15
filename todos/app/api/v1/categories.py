@@ -5,7 +5,14 @@ from pydantic import conint
 from app.core.db import get_async_session
 from app.users.users import current_logged_user
 from app.dal import db_service, GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT, MAX_POSTGRES_INTEGER
-from app.schemas import CategoryCreate, CategoryRead, CategoryInDB
+from app.schemas import (
+    CategoryCreate,
+    CategoryRead,
+    CategoryReadDetailed,
+    CategoryUpdate,
+    CategoryInDB,
+    CategoryUpdateInDB
+)
 from app.models.tables import Category, User
 from app.utils import exception_handler, get_open_api_response, get_open_api_unauthorized_access_response
 
@@ -22,7 +29,7 @@ router = APIRouter(
 
 @router.get(
     '',
-    response_model=list[CategoryRead],
+    response_model=list[CategoryReadDetailed],
     responses={status.HTTP_401_UNAUTHORIZED: get_open_api_unauthorized_access_response()}
 )
 async def get_categories(
@@ -30,12 +37,35 @@ async def get_categories(
     limit: conint(ge=0, le=MAX_POSTGRES_INTEGER) = GET_MULTI_DEFAULT_LIMIT,  # type: ignore[valid-type]
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_logged_user)
-) -> list[Category]:
+) -> list[CategoryReadDetailed]:
     return await db_service.get_categories(
         session,
         created_by_id=user.id,
         skip=skip,
         limit=limit
+    )
+
+
+@router.get(
+    '/{category_id}',
+    response_model=CategoryReadDetailed,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: get_open_api_unauthorized_access_response(),
+        status.HTTP_404_NOT_FOUND: get_open_api_response(
+            {'Trying to get a non existing or another users category': 'category does not exist'}
+        )
+    }
+)
+@exception_handler
+async def get_category(
+    category_id: int,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_logged_user)
+) -> CategoryReadDetailed:
+    return await db_service.get_category(
+        session,
+        category_id=category_id,
+        created_by_id=user.id
     )
 
 
@@ -58,6 +88,38 @@ async def add_category(
 ) -> Category:
     category_in = CategoryInDB(name=category_in.name, created_by_id=user.id)
     return await db_service.add_category(session, category_in=category_in)
+
+
+@router.patch(
+    '/{category_id}',
+    response_model=CategoryRead,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: get_open_api_unauthorized_access_response(),
+        status.HTTP_403_FORBIDDEN: get_open_api_response(
+            {'Trying to update system or another users category':
+             'a user can not update a category that was not created by him'}
+        ),
+        status.HTTP_404_NOT_FOUND: get_open_api_response(
+            {'Trying to update non existing category': 'category does not exist'}
+        ),
+        status.HTTP_409_CONFLICT: get_open_api_response(
+            {'Trying to rename to an existing category': 'category name already exists'}
+        )
+    }
+)
+@exception_handler
+async def update_category(
+    category_id: int,
+    category_in: CategoryUpdate,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_logged_user)
+) -> Category:
+    updated_category = CategoryUpdateInDB(
+        id=category_id,
+        name=category_in.name,
+        created_by_id=user.id
+    )
+    return await db_service.update_category(session, updated_category=updated_category)
 
 
 @router.delete(
