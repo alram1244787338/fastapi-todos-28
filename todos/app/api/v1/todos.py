@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import conint
 
@@ -6,7 +8,10 @@ from app.core.db import get_async_session
 from app.users.users import current_logged_user
 from app.models.tables import User, Todo
 from app.dal import db_service, GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT, MAX_POSTGRES_INTEGER
-from app.schemas import TodoRead, TodoInDB, TodoCreate, TodoUpdate, TodoUpdateInDB
+from app.schemas import (
+    TodoRead, TodoInDB, TodoCreate, TodoUpdate, TodoUpdateInDB,
+    TodoFilterParams, TodoPaginatedResponse
+)
 from app.utils import exception_handler, get_open_api_response, get_open_api_unauthorized_access_response
 
 
@@ -22,18 +27,35 @@ router = APIRouter(
 
 @router.get(
     '',
-    response_model=list[TodoRead],
+    response_model=TodoPaginatedResponse,
     responses={status.HTTP_401_UNAUTHORIZED: get_open_api_unauthorized_access_response()}
 )
 async def get_todos(
+    is_completed: Optional[bool] = Query(None, description='Filter by completion status'),
+    priority_id: Optional[int] = Query(None, description='Filter by priority ID'),
+    category_id: Optional[int] = Query(None, description='Filter by category ID'),
+    search: Optional[str] = Query(None, description='Search todos by content keyword'),
     skip: conint(ge=0, le=MAX_POSTGRES_INTEGER) = GET_MULTI_DEFAULT_SKIP,  # type: ignore[valid-type]
     limit: conint(ge=0, le=MAX_POSTGRES_INTEGER) = GET_MULTI_DEFAULT_LIMIT,  # type: ignore[valid-type]
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_logged_user)
-) -> Todo:
-    return await db_service.get_todos(
+) -> TodoPaginatedResponse:
+    filters = TodoFilterParams(
+        is_completed=is_completed,
+        priority_id=priority_id,
+        category_id=category_id,
+        search=search,
+        skip=skip,
+        limit=limit
+    )
+    items, total = await db_service.get_todos(
         session,
         created_by_id=user.id,
+        filters=filters
+    )
+    return TodoPaginatedResponse(
+        items=items,
+        total=total,
         skip=skip,
         limit=limit
     )

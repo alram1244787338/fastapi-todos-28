@@ -48,6 +48,51 @@
               "name": "Chess"
             }
           ]
+        },
+        {
+          "id": 3,
+          "is_completed": true,
+          "content": "Practice endgames",
+          "priority": {
+            "id": 1,
+            "name": "Low"
+          },
+          "categories": [
+            {
+              "id": 3,
+              "name": "Chess"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "is_completed": false,
+          "content": "Review work project",
+          "priority": {
+            "id": 1,
+            "name": "Low"
+          },
+          "categories": [
+            {
+              "id": 2,
+              "name": "Work"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "is_completed": true,
+          "content": "Buy groceries",
+          "priority": {
+            "id": 2,
+            "name": "Medium"
+          },
+          "categories": [
+            {
+              "id": 1,
+              "name": "Personal"
+            }
+          ]
         }
       ]
     },

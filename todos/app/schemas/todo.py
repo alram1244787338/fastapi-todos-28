@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -49,3 +50,21 @@ class TodoUpdate(TodoCreate):
 
 class TodoUpdateInDB(BaseUpdateInDB, TodoInDB):
     is_completed: bool
+
+
+class TodoFilterParams(BaseModel):
+    """Query parameters for filtering, searching and paginating todos."""
+    is_completed: Optional[bool] = None
+    priority_id: Optional[int] = None
+    category_id: Optional[int] = None
+    search: Optional[str] = None
+    skip: int = 0
+    limit: int = 100
+
+
+class TodoPaginatedResponse(BaseModel):
+    """Paginated response wrapper for todo lists."""
+    items: list[TodoRead]
+    total: int
+    skip: int
+    limit: int

@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy import or_, and_
 from sqlalchemy.exc import IntegrityError
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dal.db_repo import DBRepo
 from app.dal.constants import GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT
 from app.models.tables import Priority, Category, Todo
-from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB
+from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB, TodoFilterParams
 from app.http_exceptions import ResourceNotExists, UserNotAllowed, ResourceAlreadyExists
 
 
@@ -97,15 +97,29 @@ class DBService:
         session: AsyncSession,
         *,
         created_by_id: uuid.UUID,
-        skip: int = GET_MULTI_DEFAULT_SKIP,
-        limit: int = GET_MULTI_DEFAULT_LIMIT
-    ) -> list[Todo]:
-        return await self._repo.get_multi(
+        filters: TodoFilterParams
+    ) -> Tuple[list[Todo], int]:
+        filter_conditions = [Todo.created_by_id == created_by_id]
+
+        if filters.is_completed is not None:
+            filter_conditions.append(Todo.is_completed == filters.is_completed)
+
+        if filters.priority_id is not None:
+            filter_conditions.append(Todo.priority_id == filters.priority_id)
+
+        if filters.category_id is not None:
+            filter_conditions.append(Todo.categories.any(Category.id == filters.category_id))
+
+        if filters.search:
+            filter_conditions.append(Todo.content.ilike(f'%{filters.search}%'))
+
+        query_filter = and_(*filter_conditions)
+        return await self._repo.get_multi_with_count(
             session,
             table_model=Todo,
-            query_filter=Todo.created_by_id == created_by_id,
-            skip=skip,
-            limit=limit
+            query_filter=query_filter,
+            skip=filters.skip,
+            limit=filters.limit
         )
 
     async def add_todo(

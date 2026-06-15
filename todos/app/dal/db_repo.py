@@ -1,7 +1,7 @@
-from typing import Optional, Type, TypeVar, Union, Any
+from typing import Optional, Type, TypeVar, Union, Any, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 
 from app.models.base import Base
 from app.schemas.base import BaseInDB, BaseUpdateInDB
@@ -48,6 +48,33 @@ class DBRepo:
             query = query.limit(limit)
         result = await session.execute(query)
         return result.scalars().all()
+
+    async def get_multi_with_count(  # type: ignore[no-untyped-def]
+        self,
+        session: AsyncSession,
+        *,
+        table_model: Type[ModelType],
+        query_filter=None,
+        skip: int = GET_MULTI_DEFAULT_SKIP,
+        limit: Optional[int] = None
+    ) -> Tuple[list[ModelType], int]:
+        """Return a tuple of (items, total_count) for paginated queries."""
+        count_query = select(func.count()).select_from(table_model)
+        if query_filter is not None:
+            count_query = count_query.filter(query_filter)
+        count_result = await session.execute(count_query)
+        total: int = count_result.scalar_one()
+
+        data_query = select(table_model)
+        if query_filter is not None:
+            data_query = data_query.filter(query_filter)
+        data_query = data_query.offset(skip)
+        if limit is not None:
+            data_query = data_query.limit(limit)
+        data_result = await session.execute(data_query)
+        items: list[ModelType] = data_result.scalars().all()
+
+        return items, total
 
     async def create(
         self,
