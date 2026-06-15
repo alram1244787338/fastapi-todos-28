@@ -1,7 +1,7 @@
 from typing import Optional, Type, TypeVar, Union, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update, and_
 
 from app.models.base import Base
 from app.schemas.base import BaseInDB, BaseUpdateInDB
@@ -94,3 +94,47 @@ class DBRepo:
         query = delete(table_model).where(table_model.id == id_to_delete)
         await session.execute(query)
         await session.commit()
+
+    async def get_multi_by_ids(
+        self,
+        session: AsyncSession,
+        *,
+        table_model: Type[ModelType],
+        ids: list[int],
+        owner_filter=None,
+    ) -> list[ModelType]:
+        filters = [table_model.id.in_(ids)]
+        if owner_filter is not None:
+            filters.append(owner_filter)
+        query = select(table_model).filter(and_(*filters))
+        result = await session.execute(query)
+        return result.scalars().all()
+
+    async def batch_update_is_completed(
+        self,
+        session: AsyncSession,
+        *,
+        table_model: Type[ModelType],
+        ids: list[int],
+        is_completed: bool,
+    ) -> int:
+        stmt = (
+            update(table_model)
+            .where(table_model.id.in_(ids))
+            .values(is_completed=is_completed)
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+        return result.rowcount
+
+    async def delete_by_ids(
+        self,
+        session: AsyncSession,
+        *,
+        table_model: Type[ModelType],
+        ids: list[int],
+    ) -> int:
+        stmt = delete(table_model).where(table_model.id.in_(ids))
+        result = await session.execute(stmt)
+        await session.commit()
+        return result.rowcount

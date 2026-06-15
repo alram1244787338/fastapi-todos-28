@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 from app.schemas.base import BaseInDB, BaseUpdateInDB
 from app.schemas.priority import PriorityRead
@@ -49,3 +49,40 @@ class TodoUpdate(TodoCreate):
 
 class TodoUpdateInDB(BaseUpdateInDB, TodoInDB):
     is_completed: bool
+
+
+# ---------- Batch operation schemas ----------
+
+class TodoBatchIds(BaseModel):
+    ids: list[int]
+
+    @validator('ids')
+    def ids_must_not_be_empty(cls, v: list[int]) -> list[int]:
+        if not v:
+            raise ValueError('ids list must not be empty')
+        if len(v) != len(set(v)):
+            raise ValueError('ids list must not contain duplicates')
+        return v
+
+
+class TodoBatchUpdateStatus(TodoBatchIds):
+    is_completed: bool
+
+
+class TodoBatchResult(BaseModel):
+    affected: int
+
+
+# ---------- Summary schemas ----------
+
+class PriorityCount(BaseModel):
+    priority_id: int
+    priority_name: str
+    count: int
+
+
+class TodoSummary(BaseModel):
+    total: int
+    completed: int
+    uncompleted: int
+    by_priority: list[PriorityCount]

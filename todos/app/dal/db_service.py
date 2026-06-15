@@ -1,14 +1,14 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dal.db_repo import DBRepo
 from app.dal.constants import GET_MULTI_DEFAULT_SKIP, GET_MULTI_DEFAULT_LIMIT
 from app.models.tables import Priority, Category, Todo
-from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB
+from app.schemas import CategoryInDB, TodoInDB, TodoUpdateInDB, PriorityCount, TodoSummary
 from app.http_exceptions import ResourceNotExists, UserNotAllowed, ResourceAlreadyExists
 
 
@@ -175,6 +175,130 @@ class DBService:
         if todo_to_delete.created_by_id != created_by_id:
             raise UserNotAllowed('a user can not delete a todo that was not created by him')
         await self._repo.delete(session, table_model=Todo, id_to_delete=id_to_delete)
+
+    async def _validate_batch_todo_ownership(
+        self,
+        session: AsyncSession,
+        *,
+        todo_ids: list[int],
+        created_by_id: uuid.UUID,
+    ) -> list[Todo]:
+        """Fetch todos by ids and validate they all exist and belong to the user.
+
+        Raises ResourceNotExists (404) if any ids don't exist.
+        Raises UserNotAllowed (403) if any ids belong to another user.
+        Returns the fetched todos on success.
+        """
+        todos: list[Todo] = await self._repo.get_multi_by_ids(
+            session,
+            table_model=Todo,
+            ids=todo_ids,
+        )
+        found_ids = {t.id for t in todos}
+        not_found_ids = sorted(set(todo_ids) - found_ids)
+        if not_found_ids:
+            raise ResourceNotExists(resource=f'todos with ids {not_found_ids}')
+
+        unauthorized_ids = sorted(
+            t.id for t in todos if t.created_by_id != created_by_id
+        )
+        if unauthorized_ids:
+            raise UserNotAllowed(
+                f'a user can not operate on todos {unauthorized_ids} that were not created by him'
+            )
+        return todos
+
+    async def batch_complete_todos(
+        self,
+        session: AsyncSession,
+        *,
+        todo_ids: list[int],
+        created_by_id: uuid.UUID,
+    ) -> int:
+        await self._validate_batch_todo_ownership(
+            session, todo_ids=todo_ids, created_by_id=created_by_id
+        )
+        return await self._repo.batch_update_is_completed(
+            session, table_model=Todo, ids=todo_ids, is_completed=True
+        )
+
+    async def batch_update_todos_status(
+        self,
+        session: AsyncSession,
+        *,
+        todo_ids: list[int],
+        is_completed: bool,
+        created_by_id: uuid.UUID,
+    ) -> int:
+        await self._validate_batch_todo_ownership(
+            session, todo_ids=todo_ids, created_by_id=created_by_id
+        )
+        return await self._repo.batch_update_is_completed(
+            session, table_model=Todo, ids=todo_ids, is_completed=is_completed
+        )
+
+    async def batch_delete_todos(
+        self,
+        session: AsyncSession,
+        *,
+        todo_ids: list[int],
+        created_by_id: uuid.UUID,
+    ) -> int:
+        await self._validate_batch_todo_ownership(
+            session, todo_ids=todo_ids, created_by_id=created_by_id
+        )
+        return await self._repo.delete_by_ids(
+            session, table_model=Todo, ids=todo_ids
+        )
+
+    async def get_todo_summary(
+        self,
+        session: AsyncSession,
+        *,
+        created_by_id: uuid.UUID,
+    ) -> TodoSummary:
+        owner_filter = Todo.created_by_id == created_by_id
+
+        total_result = await session.execute(
+            select(func.count(Todo.id)).filter(owner_filter)
+        )
+        total: int = total_result.scalar() or 0
+
+        completed_result = await session.execute(
+            select(func.count(Todo.id)).filter(
+                and_(owner_filter, Todo.is_completed.is_(True))
+            )
+        )
+        completed: int = completed_result.scalar() or 0
+        uncompleted: int = total - completed
+
+        priority_query = (
+            select(
+                Priority.id.label('priority_id'),
+                Priority.name.label('priority_name'),
+                func.count(Todo.id).label('count'),
+            )
+            .outerjoin(Todo, and_(Todo.priority_id == Priority.id, owner_filter))
+            .group_by(Priority.id, Priority.name)
+            .having(func.count(Todo.id) > 0)
+            .order_by(Priority.id)
+        )
+        priority_result = await session.execute(priority_query)
+        by_priority: list[PriorityCount] = [
+            PriorityCount(
+                priority_id=row.priority_id,
+                priority_name=row.priority_name,
+                count=row.count,
+            )
+            for row in priority_result
+        ]
+
+        return TodoSummary(
+            total=total,
+            completed=completed,
+            uncompleted=uncompleted,
+            by_priority=by_priority,
+        )
 
 
 db_service = DBService()
